@@ -1,5 +1,7 @@
+TRUNCATE TABLE bronze.crm_cust_info;
+
 COPY bronze.crm_cust_info
-FROM 'C:\Users\rache\Code\data\projects\dwh-medallion\datasets\source_crm\cust_info.csv'
+FROM '/datasets/source_crm/cust_info.csv'
 WITH (
   FORMAT csv,
   HEADER true,

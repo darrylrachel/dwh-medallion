@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:18
+    container_name: dwh-medallion
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: DWH-Medallion
+    ports:
+      - "5440:5432"
+    volumes:
+      # Your datasets folder mounted into the container (read-only)
+      - ./datasets:/datasets:ro
+
+      # SQL scripts run automatically on first initialization
+      - ./sql:/docker-entrypoint-initdb.d:ro
