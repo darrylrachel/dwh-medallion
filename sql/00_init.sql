@@ -1,159 +1,192 @@
-/*
-=============================================================
-Create Database and Schemas
-=============================================================
-Script Purpose:
-    This script sets up three schemas within the database: 'bronze', 'silver', and 'gold',
-    as well as build the required tables.
+-- =============================================================
+-- Procedure: bronze.load_bronze
+-- Purpose:   Create medallion schemas + bronze tables (if needed),
+--            truncate, and load CSVs from /datasets.
+-- Start/Stop Docker Container:
+--            Stop: docker compose down -v
+--            Start: docker compose up -d
+-- =============================================================
 
-WARNING:
-    Running this script will drop the entire 'DataWarehouse' database if it exists.
-    All data in the database will be permanently deleted. Proceed with caution
-    and ensure you have proper backups before running this script.
-
-docker compose down -v
-docker compose up -d
-*/
-
-
-
--- --------------------
--- Schemas
--- --------------------
 CREATE SCHEMA IF NOT EXISTS bronze;
-CREATE SCHEMA IF NOT EXISTS silver;
-CREATE SCHEMA IF NOT EXISTS gold;
 
+CREATE OR REPLACE PROCEDURE bronze.load_bronze()
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_start       timestamptz := clock_timestamp();
+  v_step_start  timestamptz;
+  v_rows        bigint;
+BEGIN
+  RAISE NOTICE 'Starting bronze load...';
 
--- --------------------
--- Bronze tables
--- Raw, lightly typed, minimal constraints
--- --------------------
-CREATE TABLE IF NOT EXISTS bronze.crm_cust_info (
-    cst_id INTEGER,
-    cst_key TEXT,
-    cst_firstname TEXT,
-    cst_lastname TEXT,
-    cst_marital_status TEXT,
-    cst_gndr TEXT,
-    cst_create_date TEXT
-);
+  -- --------------------
+  -- Schemas
+  -- --------------------
+  CREATE SCHEMA IF NOT EXISTS bronze;
+  CREATE SCHEMA IF NOT EXISTS silver;
+  CREATE SCHEMA IF NOT EXISTS gold;
 
-TRUNCATE TABLE bronze.crm_cust_info;
+  -- --------------------
+  -- Tables (Bronze)
+  -- --------------------
+  CREATE TABLE IF NOT EXISTS bronze.crm_cust_info (
+      cst_id INTEGER,
+      cst_key TEXT,
+      cst_firstname TEXT,
+      cst_lastname TEXT,
+      cst_marital_status TEXT,
+      cst_gndr TEXT,
+      cst_create_date TEXT
+  );
 
-COPY bronze.crm_cust_info
-FROM '/datasets/source_crm/cust_info.csv'
-WITH (
-  FORMAT csv,
-  HEADER true,
-  DELIMITER ',',
-  NULL '',
-  ENCODING 'UTF8'
-);
+  CREATE TABLE IF NOT EXISTS bronze.crm_prd_info (
+    prd_id INTEGER,
+    prd_key TEXT,
+    prd_nm TEXT,
+    prd_cost INTEGER,
+    prd_line TEXT,
+    prd_start_dt TEXT,
+    prd_end_dt TEXT
+  );
 
-CREATE TABLE IF NOT EXISTS bronze.crm_prd_info (
-  prd_id INTEGER,
-  prd_key TEXT,
-  prd_nm TEXT,
-  prd_cost INTEGER,
-  prd_line TEXT,
-  prd_start_dt TEXT,
-  prd_end_dt TEXT
-);
+  CREATE TABLE IF NOT EXISTS bronze.crm_sales_details (
+      sls_ord_num TEXT,
+      sls_prd_key TEXT,
+      sls_cust_id INTEGER,
+      sls_order_dt TEXT,
+      sls_ship_dt TEXT,
+      sls_due_dt TEXT,
+      sls_sales INTEGER,
+      sls_quantity INTEGER,
+      sls_price INTEGER
+  );
 
-TRUNCATE TABLE bronze.crm_prd_info;
+  CREATE TABLE IF NOT EXISTS bronze.erp_cust_az12 (
+      cid TEXT,
+      bdate TEXT,
+      gen TEXT
+  );
 
-COPY bronze.crm_prd_info
-FROM '/datasets/source_crm/prd_info.csv'
-WITH (
-  FORMAT csv,
-  HEADER true,
-  DELIMITER ',',
-  NULL '',
-  ENCODING 'UTF8'
-);
+  CREATE TABLE IF NOT EXISTS bronze.erp_loc_a101 (
+      cid TEXT,
+      cntry TEXT
+  );
 
-CREATE TABLE IF NOT EXISTS bronze.crm_sales_details (
-    sls_ord_num TEXT,
-    sls_prd_key TEXT,
-    sls_cust_id INTEGER,
-    sls_order_dt TEXT,
-    sls_ship_dt TEXT,
-    sls_due_dt TEXT,
-    sls_sales INTEGER,
-    sls_quantity INTEGER,
-    sls_price INTEGER
-);
+  CREATE TABLE IF NOT EXISTS bronze.erp_px_cat_g1v2 (
+      id TEXT,
+      cat TEXT,
+      subcat TEXT,
+      maintenance TEXT
+  );
 
-TRUNCATE TABLE bronze.crm_sales_details;
+  -- --------------------
+  -- Truncate for reload
+  -- --------------------
+  RAISE NOTICE 'Truncating bronze tables...';
+  TRUNCATE TABLE
+    bronze.crm_cust_info,
+    bronze.crm_prd_info,
+    bronze.crm_sales_details,
+    bronze.erp_cust_az12,
+    bronze.erp_loc_a101,
+    bronze.erp_px_cat_g1v2;
 
-COPY bronze.crm_sales_details
-FROM '/datasets/source_crm/sales_details.csv'
-WITH (
-  FORMAT csv,
-  HEADER true,
-  DELIMITER ',',
-  NULL '',
-  ENCODING 'UTF8'
-);
+  -- --------------------
+  -- Load: CRM Cust Info
+  -- --------------------
+  v_step_start := clock_timestamp();
+  EXECUTE format($f$
+    COPY bronze.crm_cust_info
+    FROM %L
+    WITH (FORMAT csv, HEADER true, DELIMITER ',', NULL '', ENCODING 'UTF8')
+  $f$, '/datasets/source_crm/cust_info.csv');
 
-CREATE TABLE IF NOT EXISTS bronze.erp_cust_az12 (
-    cid TEXT,
-    bdate TEXT,
-    gen TEXT
-);
+  SELECT count(*) INTO v_rows FROM bronze.crm_cust_info;
+  RAISE NOTICE 'Loaded bronze.crm_cust_info: % rows (%.3f sec)',
+    v_rows, EXTRACT(epoch FROM (clock_timestamp() - v_step_start));
 
-TRUNCATE TABLE bronze.erp_cust_az12;
+  -- --------------------
+  -- Load: CRM Product Info
+  -- --------------------
+  v_step_start := clock_timestamp();
+  EXECUTE format($f$
+    COPY bronze.crm_prd_info
+    FROM %L
+    WITH (FORMAT csv, HEADER true, DELIMITER ',', NULL '', ENCODING 'UTF8')
+  $f$, '/datasets/source_crm/prd_info.csv');
 
-COPY bronze.erp_cust_az12
-FROM '/datasets/source_erp/CUST_AZ12.csv'
-WITH (
-  FORMAT csv,
-  HEADER true,
-  DELIMITER ',',
-  NULL '',
-  ENCODING 'UTF8'
-);
+  SELECT count(*) INTO v_rows FROM bronze.crm_prd_info;
+  RAISE NOTICE 'Loaded bronze.crm_prd_info: % rows (%.3f sec)',
+    v_rows, EXTRACT(epoch FROM (clock_timestamp() - v_step_start));
 
-CREATE TABLE IF NOT EXISTS bronze.erp_loc_a101 (
-    cid TEXT,
-    cntry TEXT
-);
+  -- --------------------
+  -- Load: CRM Sales Details
+  -- --------------------
+  v_step_start := clock_timestamp();
+  EXECUTE format($f$
+    COPY bronze.crm_sales_details
+    FROM %L
+    WITH (FORMAT csv, HEADER true, DELIMITER ',', NULL '', ENCODING 'UTF8')
+  $f$, '/datasets/source_crm/sales_details.csv');
 
-TRUNCATE TABLE bronze.erp_loc_a101;
+  SELECT count(*) INTO v_rows FROM bronze.crm_sales_details;
+  RAISE NOTICE 'Loaded bronze.crm_sales_details: % rows (%.3f sec)',
+    v_rows, EXTRACT(epoch FROM (clock_timestamp() - v_step_start));
 
-COPY bronze.erp_loc_a101
-FROM '/datasets/source_erp/loc_a101.csv'
-WITH (
-  FORMAT csv,
-  HEADER true,
-  DELIMITER ',',
-  NULL '',
-  ENCODING 'UTF8'
-);
+  -- --------------------
+  -- Load: ERP Cust AZ12
+  -- --------------------
+  v_step_start := clock_timestamp();
+  EXECUTE format($f$
+    COPY bronze.erp_cust_az12
+    FROM %L
+    WITH (FORMAT csv, HEADER true, DELIMITER ',', NULL '', ENCODING 'UTF8')
+  $f$, '/datasets/source_erp/CUST_AZ12.csv');
 
-CREATE TABLE IF NOT EXISTS bronze.erp_px_cat_g1v2 (
-    id TEXT,
-    cat TEXT,
-    subcat TEXT,
-    maintenance TEXT
-);
+  SELECT count(*) INTO v_rows FROM bronze.erp_cust_az12;
+  RAISE NOTICE 'Loaded bronze.erp_cust_az12: % rows (%.3f sec)',
+    v_rows, EXTRACT(epoch FROM (clock_timestamp() - v_step_start));
 
-TRUNCATE TABLE bronze.erp_px_cat_g1v2;
+  -- --------------------
+  -- Load: ERP LOC A101
+  -- --------------------
+  v_step_start := clock_timestamp();
+  EXECUTE format($f$
+    COPY bronze.erp_loc_a101
+    FROM %L
+    WITH (FORMAT csv, HEADER true, DELIMITER ',', NULL '', ENCODING 'UTF8')
+  $f$, '/datasets/source_erp/LOC_A101.csv');  -- adjust if lowercase
 
-COPY bronze.erp_px_cat_g1v2
-FROM '/datasets/source_erp/px_cat_g1v2.csv'
-WITH (
-  FORMAT csv,
-  HEADER true,
-  DELIMITER ',',
-  NULL '',
-  ENCODING 'UTF8'
-);
+  SELECT count(*) INTO v_rows FROM bronze.erp_loc_a101;
+  RAISE NOTICE 'Loaded bronze.erp_loc_a101: % rows (%.3f sec)',
+    v_rows, EXTRACT(epoch FROM (clock_timestamp() - v_step_start));
 
+  -- --------------------
+  -- Load: ERP PX CAT G1V2
+  -- --------------------
+  v_step_start := clock_timestamp();
+  EXECUTE format($f$
+    COPY bronze.erp_px_cat_g1v2
+    FROM %L
+    WITH (FORMAT csv, HEADER true, DELIMITER ',', NULL '', ENCODING 'UTF8')
+  $f$, '/datasets/source_erp/PX_CAT_G1V2.csv'); -- adjust if lowercase
 
--- --------------------
--- Indexes
--- --------------------
-CREATE INDEX IF NOT EXISTS idx_bronze_cust_id
-    ON bronze.crm_cust_info (cst_id);
+  SELECT count(*) INTO v_rows FROM bronze.erp_px_cat_g1v2;
+  RAISE NOTICE 'Loaded bronze.erp_px_cat_g1v2: % rows (%.3f sec)',
+    v_rows, EXTRACT(epoch FROM (clock_timestamp() - v_step_start));
+
+  -- --------------------
+  -- Indexes
+  -- --------------------
+  CREATE INDEX IF NOT EXISTS idx_bronze_cust_id
+      ON bronze.crm_cust_info (cst_id);
+
+  RAISE NOTICE 'Bronze load complete. Total time: %.3f sec',
+    EXTRACT(epoch FROM (clock_timestamp() - v_start));
+
+END;
+$$;
+
+-- Run it:
+CALL bronze.load_bronze();
+
